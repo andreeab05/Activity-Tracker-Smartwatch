@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.NotListedLocation
 import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,7 +21,8 @@ import androidx.wear.compose.material.Text
 @Composable
 fun PhonePairingScreen(
     modifier: Modifier = Modifier,
-    sendUID: () -> Unit
+    sendUID: () -> Unit,
+    setLocationMonitor: () -> Unit
 ) {
     Box(
         modifier = modifier
@@ -40,6 +42,12 @@ fun PhonePairingScreen(
                 onClick = { sendUID() },
             ) {
                 Icon(Icons.AutoMirrored.Filled.SendToMobile, contentDescription = null)
+            }
+            Button(
+                modifier = Modifier.padding(8.dp),
+                onClick = { setLocationMonitor()},
+            ) {
+                Icon(Icons.AutoMirrored.Filled.NotListedLocation, contentDescription = null)
             }
         }
     }
