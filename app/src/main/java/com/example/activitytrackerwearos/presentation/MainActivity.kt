@@ -6,7 +6,8 @@
 
 package com.example.activitytrackerwearos.presentation
 
-import android.content.Context
+import android.Manifest
+import android.annotation.SuppressLint
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -31,11 +32,42 @@ import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import com.google.android.gms.location.Geofence
+import com.google.android.gms.location.GeofencingClient
+import com.google.android.gms.location.GeofencingRequest
+import com.google.android.gms.location.LocationServices
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import androidx.core.app.ActivityCompat
+import com.example.activitytrackerwearos.presentation.screens.LocationEventsReceiver
+import com.google.android.gms.wearable.MessageClient
+import com.google.android.gms.wearable.MessageEvent
 
 class MainActivity : ComponentActivity() {
     private val MESSAGE_PASSING_CAPABILITY_NAME = "message_passing"
     private val MESSAGE_PASSING_MESSAGE_PATH = "/message_passing"
+    private val MESSAGE_PASSING_REMINDER = "/reminder"
     private var transcriptionNodeId: String? = null
+    private val LOCATION_PERMISSION_REQUEST_CODE = 1001
+    private val BACKGROUND_LOCATION_PERMISSION_REQUEST_CODE = 1002
+    private val latitude: Double = 44.378239
+    private val longitude: Double = 26.099380
+    private val radius: Float = 100f
+    private val messageClient: MessageClient by lazy {
+        Wearable.getMessageClient(this)
+    }
+
+    private val messageListener = object : MessageClient.OnMessageReceivedListener {
+        override fun onMessageReceived(messageEvent: MessageEvent) {
+            if (messageEvent.path == MESSAGE_PASSING_REMINDER) {
+                val receivedData = messageEvent.data
+                // Handle received data here
+                Log.d("MessageReceiver", "Received data: ${receivedData.decodeToString()}")
+            }
+        }
+    }
 
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,9 +75,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setTheme(android.R.style.Theme_DeviceDefault)
+        messageClient.addListener(messageListener)
 
         setContent {
-            WearApp { setupMessagePassing() }
+            WearApp(sendUID = {setupMessagePassing()}, setLocationMonitor = {setGeofence()})
         }
     }
 
@@ -107,10 +140,129 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun setGeofence(){
+        Log.d("Geofence", "in setGeofence")
+        val fineLocationPermissionGranted = ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val coarseLocationPermissionGranted = ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+//        val backgroundLocationPermissionGranted = ActivityCompat.checkSelfPermission(
+//            this,
+//            Manifest.permission.ACCESS_BACKGROUND_LOCATION
+//        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!fineLocationPermissionGranted || !coarseLocationPermissionGranted
+        ) {
+            Log.d("Geofence", "Has to request permissions")
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                ),
+                LOCATION_PERMISSION_REQUEST_CODE
+            )
+            return
+        }
+
+        requestBackgroundLocationPermission()
+    }
+
+    private fun requestBackgroundLocationPermission() {
+        val backgroundLocationPermissionGranted = ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_BACKGROUND_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!backgroundLocationPermissionGranted) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                BACKGROUND_LOCATION_PERMISSION_REQUEST_CODE
+            )
+            return
+        }
+
+        // Background location permission already granted, proceed to add geofence
+        addGeofence()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun addGeofence(){
+        Log.d("Geofence", "In functie")
+        val geofence = Geofence.Builder()
+            .setRequestId("myGeofenceId")
+            .setCircularRegion(latitude, longitude, radius)
+            .setExpirationDuration(Geofence.NEVER_EXPIRE)
+            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
+            .build()
+        // Create geofencing request
+        val geofencingRequest = GeofencingRequest.Builder()
+            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+            .addGeofence(geofence)
+            .build()
+
+        // Register geofences
+        val geofencingClient: GeofencingClient = LocationServices.getGeofencingClient(applicationContext)
+        geofencingClient.addGeofences(geofencingRequest, getGeofencePendingIntent(applicationContext))
+            .addOnSuccessListener {
+                // Geofences added successfully
+                Log.d("Geofence","Geofence addded")
+            }
+            .addOnFailureListener { e ->
+                Log.d("Geofence", "Geofence failed: ${e.message}")
+                e.printStackTrace()
+                // Failed to add geofences
+            }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            LOCATION_PERMISSION_REQUEST_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                    // Foreground permissions granted, now request background location permission
+                    requestBackgroundLocationPermission()
+                } else {
+                    // Handle permission denied for foreground permissions
+                    Log.d("Permission", "Foreground permission denied")
+                }
+            }
+
+            BACKGROUND_LOCATION_PERMISSION_REQUEST_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                    // Background location permission granted, proceed to add geofence
+                    addGeofence()
+                } else {
+                    // Handle permission denied for background location
+                    Log.d("Permission", "Background location permission denied")
+                }
+            }
+        }
+
+    }
+
+    // Create PendingIntent to handle geofence events
+    private fun getGeofencePendingIntent(context: Context): PendingIntent {
+        val intent = Intent(context, LocationEventsReceiver::class.java)
+        return PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+
 }
 
 @Composable
-fun WearApp(sendUID: () -> Unit) {
+fun WearApp(sendUID: () -> Unit, setLocationMonitor: () -> Unit) {
 
     ActivityTrackerWearOSTheme {
         Scaffold(
@@ -121,7 +273,7 @@ fun WearApp(sendUID: () -> Unit) {
                 Vignette(vignettePosition = VignettePosition.TopAndBottom)
             },
         ) {
-            PhonePairingScreen(sendUID = sendUID)
+            PhonePairingScreen(sendUID = sendUID, setLocationMonitor = setLocationMonitor)
         }
     }
 }
