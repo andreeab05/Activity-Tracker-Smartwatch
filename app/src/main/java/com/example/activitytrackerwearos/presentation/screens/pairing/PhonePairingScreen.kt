@@ -12,18 +12,23 @@ import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.example.activitytrackerwearos.presentation.screens.reminders.MedicationReminderState
+import com.example.activitytrackerwearos.presentation.screens.reminders.ReminderScheduler
 
 @Composable
 fun PhonePairingScreen(
     modifier: Modifier = Modifier,
     sendUID: () -> Unit,
-    setLocationMonitor: () -> Unit
+    setLocationMonitor: () -> Unit,
+    //medicationReminders: List<MedicationReminderState>
 ) {
+    val reminderScheduler = ReminderScheduler(LocalContext.current)
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -45,7 +50,7 @@ fun PhonePairingScreen(
             }
             Button(
                 modifier = Modifier.padding(8.dp),
-                onClick = { setLocationMonitor()},
+                onClick = { reminderScheduler.schedule("Aspenter", 2, 15, 35, 2)}//setLocationMonitor()},
             ) {
                 Icon(Icons.AutoMirrored.Filled.NotListedLocation, contentDescription = null)
             }
