@@ -12,17 +12,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.compose.runtime.Composable
 import android.os.Build
 import androidx.annotation.RequiresApi
-import com.example.activitytrackerwearos.presentation.theme.ActivityTrackerWearOSTheme
 import android.provider.Settings
 import android.util.Log
-import androidx.wear.compose.material.Scaffold
-import androidx.wear.compose.material.TimeText
-import androidx.wear.compose.material.Vignette
-import androidx.wear.compose.material.VignettePosition
-import com.example.activitytrackerwearos.presentation.screens.PhonePairingScreen
+import com.example.activitytrackerwearos.presentation.screens.pairing.PhonePairingScreen
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.CapabilityClient
@@ -41,13 +35,32 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.app.ActivityCompat
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.lifecycle.lifecycleScope
+import androidx.wear.compose.material.Scaffold
+import androidx.wear.compose.material.TimeText
+import androidx.wear.compose.material.Vignette
+import androidx.wear.compose.material.VignettePosition
+import com.example.activitytrackerwearos.data.DatastoreRepository
 import com.example.activitytrackerwearos.presentation.screens.LocationEventsReceiver
+import com.example.activitytrackerwearos.presentation.screens.home.HomeScreen
+import com.example.activitytrackerwearos.presentation.screens.pairing.PairingViewModel
+import com.example.activitytrackerwearos.presentation.screens.reminders.MedicationReminderState
+import com.example.activitytrackerwearos.presentation.screens.reminders.ReminderScheduler
+import com.example.activitytrackerwearos.presentation.theme.ActivityTrackerWearOSTheme
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
+import kotlinx.serialization.json.Json
+
+val DATASTORE_NAME = "settings"
 
 class MainActivity : ComponentActivity() {
     private val MESSAGE_PASSING_CAPABILITY_NAME = "message_passing"
     private val MESSAGE_PASSING_MESSAGE_PATH = "/message_passing"
+    private val MESSAGE_PASSING_ACK = "/ack"
     private val MESSAGE_PASSING_REMINDER = "/reminder"
     private var transcriptionNodeId: String? = null
     private val LOCATION_PERMISSION_REQUEST_CODE = 1001
@@ -58,37 +71,110 @@ class MainActivity : ComponentActivity() {
     private val messageClient: MessageClient by lazy {
         Wearable.getMessageClient(this)
     }
+    private val pairingKey = booleanPreferencesKey("paired")
+    var medicationReminders: List<MedicationReminderState> = mutableListOf()
+    val reminderScheduler: ReminderScheduler by lazy { ReminderScheduler(this) }
+    val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = DATASTORE_NAME)
+    private val datastoreRepository: DatastoreRepository by lazy{ DatastoreRepository(dataStore)}
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
+        super.onCreate(savedInstanceState)
+        val context = this
+
+        setTheme(android.R.style.Theme_DeviceDefault)
+        messageClient.addListener(messageListener)
+        lifecycleScope.launch {
+            Log.d("error", "onCreate: launch")
+            datastoreRepository.readData(pairingKey).collect { value ->
+                if (value != null) {
+                    setContent {
+                        ActivityTrackerWearOSTheme {
+                            Scaffold(
+                                timeText = {
+                                    TimeText()
+                                },
+                                vignette = {
+                                    Vignette(vignettePosition = VignettePosition.TopAndBottom)
+                                },
+                            ) {
+                                TrackerApp(paired = value, setUID = { setupMessagePassing() }, datastoreRepository, context)
+                            }
+                        }
+                    }
+                } else {
+                    Log.d("error", "aici??")
+                    setContent {
+                        ActivityTrackerWearOSTheme {
+                            Scaffold(
+                                timeText = {
+                                    TimeText()
+                                },
+                                vignette = {
+                                    Vignette(vignettePosition = VignettePosition.TopAndBottom)
+                                },
+                            ) {
+                                TrackerApp(paired = false, setUID = { setupMessagePassing() }, datastoreRepository, context)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 
     private val messageListener = object : MessageClient.OnMessageReceivedListener {
         override fun onMessageReceived(messageEvent: MessageEvent) {
             if (messageEvent.path == MESSAGE_PASSING_REMINDER) {
                 val receivedData = messageEvent.data
                 // Handle received data here
+                val jsonString = receivedData.toString(Charsets.UTF_8)
+                // Decode the JSON string into a list of MedicationReminderState objects
+                medicationReminders = Json.decodeFromString(jsonString)
+                medicationReminders.forEach { reminder ->
+                    var days = 0
+                    var months = 0
+
+                    if (reminder.days.isNotEmpty()) {
+                        days = reminder.days.toInt()
+                    }
+
+                    if (reminder.months.isNotEmpty()) {
+                        months = reminder.months.toInt()
+                    }
+                    val numDays = days + 30 * months
+                    val amount = reminder.amount.toInt()
+                    val medicationName = reminder.medicationName
+                    val hour = reminder.hour.toInt()
+                    val minute = reminder.minute.toInt()
+                    reminderScheduler.schedule(
+                        medicineName = medicationName,
+                        amount = amount,
+                        hour = hour,
+                        minute = minute,
+                        numDays = numDays
+                    )
+                }
                 Log.d("MessageReceiver", "Received data: ${receivedData.decodeToString()}")
+            } else if (messageEvent.path == MESSAGE_PASSING_ACK) {
+                lifecycleScope.launch {
+                    datastoreRepository.saveData(pairingKey, true)
+                }
             }
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
-        super.onCreate(savedInstanceState)
-
-        setTheme(android.R.style.Theme_DeviceDefault)
-        messageClient.addListener(messageListener)
-
-        setContent {
-            WearApp(sendUID = {setupMessagePassing()}, setLocationMonitor = {setGeofence()})
-        }
-    }
 
     private fun getDeviceId(context: Context): String {
         return Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
     }
 
-    private val capabilityListener = CapabilityClient.OnCapabilityChangedListener { capabilityInfo ->
-        // Handle capability changes here
-    }
+    private val capabilityListener =
+        CapabilityClient.OnCapabilityChangedListener { capabilityInfo ->
+            // Handle capability changes here
+        }
 
     private fun setupMessagePassing() {
         if (applicationContext == null)
@@ -141,7 +227,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun setGeofence(){
+    private fun setGeofence() {
         Log.d("Geofence", "in setGeofence")
         val fineLocationPermissionGranted = ActivityCompat.checkSelfPermission(
             this,
@@ -152,11 +238,6 @@ class MainActivity : ComponentActivity() {
             this,
             Manifest.permission.ACCESS_COARSE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
-
-//        val backgroundLocationPermissionGranted = ActivityCompat.checkSelfPermission(
-//            this,
-//            Manifest.permission.ACCESS_BACKGROUND_LOCATION
-//        ) == PackageManager.PERMISSION_GRANTED
 
         if (!fineLocationPermissionGranted || !coarseLocationPermissionGranted
         ) {
@@ -195,7 +276,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun addGeofence(){
+    private fun addGeofence() {
         Log.d("Geofence", "In functie")
         val geofence = Geofence.Builder()
             .setRequestId("myGeofenceId")
@@ -210,11 +291,15 @@ class MainActivity : ComponentActivity() {
             .build()
 
         // Register geofences
-        val geofencingClient: GeofencingClient = LocationServices.getGeofencingClient(applicationContext)
-        geofencingClient.addGeofences(geofencingRequest, getGeofencePendingIntent(applicationContext))
+        val geofencingClient: GeofencingClient =
+            LocationServices.getGeofencingClient(applicationContext)
+        geofencingClient.addGeofences(
+            geofencingRequest,
+            getGeofencePendingIntent(applicationContext)
+        )
             .addOnSuccessListener {
                 // Geofences added successfully
-                Log.d("Geofence","Geofence addded")
+                Log.d("Geofence", "Geofence addded")
             }
             .addOnFailureListener { e ->
                 Log.d("Geofence", "Geofence failed: ${e.message}")
@@ -256,25 +341,13 @@ class MainActivity : ComponentActivity() {
     // Create PendingIntent to handle geofence events
     private fun getGeofencePendingIntent(context: Context): PendingIntent {
         val intent = Intent(context, LocationEventsReceiver::class.java)
-        return PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return PendingIntent.getBroadcast(
+            context,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
-}
-
-@Composable
-fun WearApp(sendUID: () -> Unit, setLocationMonitor: () -> Unit) {
-
-    ActivityTrackerWearOSTheme {
-        Scaffold(
-            timeText = {
-                TimeText()
-            },
-            vignette = {
-                Vignette(vignettePosition = VignettePosition.TopAndBottom)
-            },
-        ) {
-            PhonePairingScreen(sendUID = sendUID, setLocationMonitor = setLocationMonitor)
-        }
-    }
 }
 
